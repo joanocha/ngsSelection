@@ -1,0 +1,82 @@
+import numpy as np
+import pandas as pd
+
+# snakemake --config input_file=input_up_to_116.txt output_file=output.txt modality=snps window_size=50 step_size=10 --delete-all-output
+
+input_file = config["input_file"]
+output_file = config["output_file"]
+modality = config["modality"]
+window_size = config["window_size"]
+step_size = config["step_size"]
+
+
+if modality == "bps":
+    genome_size_file = "genome_size_bps.bed"
+    input_matrix_file = input_file
+elif modality == "snps":
+    genome_size_file = "genome_size_snps.bed"
+    input_matrix_file = "transformed_input_file.txt"
+else:
+    raise Exception("modality not supported")
+
+
+print("Assuming input file is sorted")
+
+
+rule all:
+    input:
+        output_file
+
+
+rule make_genome_size_bps:
+    input:
+        input_file
+    output:
+        temp("genome_size_bps.bed")
+    run:
+        input_df = pd.read_csv(input[0], "\t", header=None)
+        output_df = input_df.groupby(by=0, sort=False)[1].max()
+        output_df.to_csv(output[0], "\t", header=False)
+
+
+rule make_genome_size_snps:
+    input:
+        input_file
+    output:
+        temp("genome_size_snps.bed")
+    run:
+        input_df = pd.read_csv(input[0], "\t", header=None)
+        output_df = input_df.groupby(by=0, sort=False)[1].count()
+        output_df.to_csv(output[0], "\t", header=False)
+
+
+rule make_windows: 
+    input:
+        genome_size_file
+    output:
+        temp("windows.bed")
+    shell:
+        "bedtools makewindows -g {input} -w {window_size} -s {step_size} | awk '{{if($3-$2 >= {window_size}) print}}' > {output}"
+
+
+rule make_transformed_input:
+    input:
+        input_file,
+        "genome_size_snps.bed"
+    output:
+        temp("transformed_input_file.txt")
+    run:
+        df = pd.read_csv(input[0], "\t", header=None)
+        genome_size = pd.read_csv(input[1], "\t", header=None)[1].values
+        df[1] = np.concatenate([np.arange(chr_size) for chr_size in genome_size])
+        df.to_csv(output[0], "\t", header=False, index=False)
+
+
+rule make_window_aggregate:
+    input:
+        "windows.bed",
+        input_matrix_file
+    output:
+        output_file
+    shell:
+        """awk 'BEGIN {{FS="\t"; OFS="\t"}} {{$2=$2 "\t" $2+1}} 1' {input[1]} | bedtools map -a {input[0]} -b stdin -o sum -c 4,5,6,7,8,9 > {output}"""
