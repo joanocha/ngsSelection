@@ -1,0 +1,107 @@
+
+
+import numpy as np
+import pandas as pd
+rule all:
+    input: 'final/ranked.txt'
+
+
+rule get_outliers:
+    input: 'alpha_vr'
+    output: temp('final/outliers.bed')
+    run:
+        df = pd.read_csv(input[0], '\t')
+        # names=["chromo", "winstart", "winend", "wincenter", "tP_x", "nsites_x", "relative_pi_x", "tP_y", "nsites_y","relative_pi_y","tP_z", "nsites_z", "relative_pi_z", "relative_total_pi", "relative_alpha", "total_pi", "alpha"])
+        condition = (df.total_pi  > 0)
+        df = df[condition]
+        print(df.shape)
+        print(df)
+        df = df.sort_values(by="alpha", ascending=True)
+        print(df)
+        df.to_csv(output[0], '\t', header=False, index=False, columns=["chromo", "winstart", "winend", "wincenter", "relative_alpha", "alpha", "nsites_x"])
+
+
+rule bedtools_sort:
+    input: 'final/outliers.bed'
+    output: temp('final/outliers.sorted.bed')
+    shell:
+        'bedtools sort -i {input} > {output}'
+rule bedtools_map:
+    input:
+        'final/outliers.sorted.bed',
+        '/space/s1/joana/refgenomes/Functional_annotation/bedmap/genesDog.sorted.bed'
+    output:
+        'final/outlier_genes.bed'
+    shell:
+        'bedtools map -a {input[0]} -b {input[1]} -c 4 -o distinct | sort -k5,5g > {output}'
+
+        #### assumes the column of the file (relative_alpha c5; alpha is  c6)
+
+
+rule rank_genes:
+    input: 'final/outlier_genes.bed'
+    output: 'final/ranked.txt'
+    run:
+        df = pd.read_csv(input[0], '\t', header = None)
+        print(df)
+        genes = df[7].apply(lambda x: x.split(",")).values
+        genes = [list(set([gene for gene in gene_list if gene != "."])) for gene_list in genes]
+        genes = [gene_list for gene_list in genes if len(gene_list) == 1]
+        genes = np.concatenate(genes)
+        genes = pd.unique(genes)
+        pd.DataFrame(genes).to_csv(output[0], index=False, header=False)
+
+
+
+#rule intersect_outliers_and_genes:
+ #   input:
+  ##      'final/outliers.bed',
+  #      "final/genes_filtered.bed"
+  #  output:
+   #     'final/intersection.bed'
+   # shell:
+    #    'bedtools intersect -a {input[0]} -b {input[1]} -loj > {output}'
+
+#rule simplify:
+ #   input: 'final/intersection.bed',
+  #  output: 'final/intersection.bed2',
+    # shell: ' cat {input}| cut -f 1-3,27 > {output}'
+   # shell: ' cat {input}| cut -f 1-3,24 > {output}'
+
+
+
+#rule filter_mapping:
+ #   input: 'final/intersection.bed2',
+  #  output: 'final/intersection.bed3',
+   # run:
+    #    in_df = pd.read_csv(input[0], '\t', header=None)
+     #   out_df = in_df.groupby([0,1,2])[3].apply(lambda x: str(list(np.unique(list(x)))))
+      #  out_df.to_csv(output[0], '\t', header=False)
+
+
+#rule merge_toFinal:
+ #   input:
+  #      'final/outliers.bed',
+   #     'final/intersection.bed3'
+    #output:
+     #   'final/outlier_genes.bed'
+    #run:
+     #   df1 = pd.read_csv(input[0], '\t', header=None)
+      #  df2 = pd.read_csv(input[1], '\t', header=None)
+       # result = pd.merge(df1,df2, how='inner', on=[0,1,2])
+        #result['3_y'] = result['3_y'].str.extractall('\((.*?)\)').groupby(level=0)[0].apply(lambda x: str(list(np.unique(list(x)))))
+        #result = result.fillna('[]')
+        #result.to_csv(output[0], '\t', header=False, index=False)
+
+
+#rule cat_columns_interest:
+ #   input:
+  #      'final/outlier_genes.bed'
+   # output:
+    #    'final/outlier_genes.subset'
+    #shell: """
+    #cat {input[0]} | cut -f 1,2,3,12,16,17 > {output[0]}
+    #"""
+#10 for PBS0
+#11 for PBS1
+#12 for PBS2
