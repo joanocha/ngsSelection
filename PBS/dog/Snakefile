@@ -1,57 +1,51 @@
 import numpy as np
 import pandas as pd
+#snakemake -s intersect_genes_outliers.py --config input_file=vr_vvEU_vvNA_qc_ind66cov1pval5_50kb10kb
 rule all:
-    input: 'final/ranked.txt'
+    input:
+        expand(
+            'output/{pbs}/{percentile}/outlier_genes.txt',
+            pbs=["PBS0_w", "PBS1_w", "PBS2_w"],
+            percentile=[99.95, 99.5],
+        )
+
+rule add_genes:
+    input:
+        config["input_file"],
+        '/space/s2/joana/refgenomes/Functional_annotation/bedmap/genesDog.sorted.bed',
+    output:
+        "output/windows.bed",
+    shell:
+        'bedtools sort -i {input[0]} | bedtools map -a stdin -b {input[1]} -c 4 -o distinct > {output}'
 
 rule get_outliers:
-    input: 'vr_vvEU_vvNA_qc_ind66cov1pval5_snps_noIntrogressed_1snp1snp'
-    output: 'final/outliers.bed'
-    run:
-         df = pd.read_csv(input[0], '\t', header=None, names=["chr","pos_start", "pos_end", "fst01_w", "fst02_w", "fst12_w", "fst01_uw", "fst02_uw", "fst12_uw","PBS0_w", "PBS1_w", "PBS2_w", "PBS0_uw","PBS1_uw", "PBS2_uw","nsites"])
-         #condition = (df.nsites  > 10)
-         #df = df[condition]
-         #print(df.shape)
-         df = df.sort_values(by="PBS1_w", ascending=False)
-         df.to_csv(output[0], '\t', header=False, index=False)
-
-rule simplify_outliers:
-    input: 'final/outliers.bed'
-    output: 'final/outliers_simple.bed'
-    shell:
-        'cut -f 1,2,3,10,11,12,16 {input} > {output}'
-
-rule bedtools_sort:
-    input: 'final/outliers_simple.bed'
-    output: 'final/outliers.sorted.bed'
-    shell:
-        'bedtools sort -i {input} > {output}'
-
-
-rule bedtools_map:
     input:
-        #'/space/s1/joana/refgenomes/Canis_familiraris/scaffolds_length.bed',
-        'final/outliers.sorted.bed',
-        '/space/s1/joana/refgenomes/Functional_annotation/bedmap/genesDog.sorted.bed'
+        "output/windows.bed",
     output:
-        'final/outlier_genes.bed'
-    shell:
-        #'bedtools slop -b 50000 -g {input[0]} -i {input[1]} | bedtools map -a stdin -b {input[2]} -c 4 -o distinct | sort -k5,5gr  > {output}'
-        'bedtools map -a {input[0]} -b {input[1]} -c 4 -o distinct | sort -k 5,5gr > {output}' #### assumes the column of the file (PBS0,1,2)
-
-rule rank_genes:
-    input: 'final/outlier_genes.bed'
-    output: 'final/ranked.txt'
+        'output/{pbs}/{percentile}/outliers.bed',
     run:
-        df = pd.read_csv(input[0], '\t', header = None)
+        pbs = wildcards["pbs"]
+        percentile = float(wildcards["percentile"])
+        df = pd.read_csv(input[0], '\t', header=None, names=["chr", "pos_start", "pos_end", "fst01_w", "fst02_w", "fst12_w", "fst01_uw", "fst02_uw", "fst12_uw","PBS0_w", "PBS1_w", "PBS2_w", "PBS0_uw", "PBS1_uw", "PBS2_uw","nsites", "genes"])
         print(df)
-        genes = df[7].apply(lambda x: x.split(",")).values
-        genes = [list(set([gene for gene in gene_list if gene != "."])) for gene_list in     genes]
-        genes = [gene_list for gene_list in genes if len(gene_list) == 1]
-        genes = np.concatenate(genes)
-        genes = pd.unique(genes)
+        threshold = df[pbs].quantile(percentile / 100.0)
+        df = df[df[pbs] >= threshold]
+        df = df.sort_values(by=pbs, ascending=False)
+        df.to_csv(output[0], '\t', index=False)
+
+
+rule extract_genes:
+    input:
+        'output/{pbs}/{percentile}/outliers.bed',
+    output:
+        'output/{pbs}/{percentile}/outlier_genes.txt',
+    run:
+        df = pd.read_csv(input[0], '\t')
+        print(df)
+        df = df[df.genes != "."]
+        df["genes"] =  df.genes.str.split(",")
+        genes = pd.unique(np.concatenate(df.genes.values))
         pd.DataFrame(genes).to_csv(output[0], index=False, header=False)
-
-
 
 
 

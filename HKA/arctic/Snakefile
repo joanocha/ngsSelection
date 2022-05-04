@@ -2,74 +2,78 @@ import numpy as np
 import pandas as pd
 
 rule all:
-    input: 'final/ranked.txt'
-
+    input:
+        expand(
+            'output/{hka}/{percentile}/outlier_genes.txt',
+             hka=["HKA_x_chi2", "HOMO_chi2"],
+             percentile=[95.0, 99.0, 99.95, 99.5],
+        )
 
 rule filter_gff:
     input:
-        "/space/s1/joana/refgenomes/Functional_annotation/bedmap/vulpes_lagopus.liftoff.gff"
+        "/space/s2/joana/refgenomes/Functional_annotation/bedmap/vulpes_lagopus.liftoff.gff"
     output:
-        temp("final/genes_filtered.bed")
+        temp("output/genes_filtered.bed")
     run:
         data = pd.read_csv(input[0], '\t', header=None)
+        data = data[data[2]=="gene"]
         data["gene"] = data[8].str.split(";").str[0].str.split("=").str[1]
         data.to_csv(output[0], '\t', columns=[0, 3,4, "gene"],header=False, index = False )
 
 rule sort_gff:
-    input: 'final/genes_filtered.bed'
-    output: temp('final/genes_filtered.sorted.bed')
+    input:
+        'output/genes_filtered.bed'
+    output:
+        'output/genes_filtered.sorted.bed'
     shell:
         'bedtools sort -i {input} > {output}'
+
+
+rule add_genes:
+    input:
+        config["input_file"],
+        'output/genes_filtered.sorted.bed'
+    output:
+        "output/windows.bed",
+    shell:
+        'bedtools sort -i {input[0]} | bedtools map -a stdin -b {input[1]} -c 4 -o distinct > {output}'
 
 
 rule get_outliers:
-    input: 'vr_arctic_vz_ind66cov1pval5_HKAoutput_50kb10kb'
-    output: 'final/outliers.bed'
-    run:
-        df = pd.read_csv(input[0], '\t', names=["chrom","start","end","a","b","c","d","HKA_x_chi2","HKA_y_chi2", "HOMO_chi2", "HKA_x_logpval", "HKA_y_logpval","HOMO_logpval"])
-        #print(df.head())
-        condition = (
-            (df.c > df.a)
-          # ((df.c / df.a) > (df.c.sum() / df.a.sum())) &
-           # (df.c / df.a > df.d / df.b)
-           #((df.d / df.b) < (df.d.sum() / df.b.sum()))
-        )
-        print(df.shape)
-        df = df[condition]
-        print(df.shape)
-        df = df.sort_values(by="HKA_x_chi2", ascending=False)
-        df = df.replace(np.nan, 'nan', regex=True)
-        df.to_csv(output[0], '\t', header=False, index=False)
-
-
-rule bedtools_sort:
-    input: 'final/outliers.bed'
-    output: 'final/outliers.sorted.bed'
-    shell:
-        'bedtools sort -i {input} > {output}'
-
-rule bedtools_map:
     input:
-        'final/outliers.sorted.bed',
-        'final/genes_filtered.sorted.bed'
+        "output/windows.bed",
     output:
-        'final/outlier_genes.bed'
-    shell:
-        'bedtools map -a {input[0]} -b {input[1]} -c 4 -o distinct | sort -k 8,8nr > {output}'
-
-# 8 is HKA_x_chi2
-
-rule rank_genes:
-    input: 'final/outlier_genes.bed'
-    output: 'final/ranked.txt'
+        'output/{hka}/{percentile}/outliers.bed'
     run:
-        df = pd.read_csv(input[0], '\t', header = None)
-        print(df)
-        genes = df[13].apply(lambda x: x.split(",")).values
-        genes = [list(set([gene for gene in gene_list if gene != "."]))   for gene_list in genes]
-        genes = [gene_list for gene_list in genes if len(gene_list) == 1]
-        genes = np.concatenate(genes)
-        genes = pd.unique(genes)
+        hka = wildcards["hka"]
+        percentile = float(wildcards["percentile"])
+        df = pd.read_csv(input[0], '\t', header=None, names=["chrom","start","end","a","b","c","d","HKA_x_chi2","HKA_y_chi2", "HOMO_chi2", "HKA_x_logpval", "HKA_y_logpval","HOMO_logpval", "genes"])
+        print(df.head())
+        condition = (
+            (df.c > df.a) &
+            ((df.c / df.a) > (df.c.sum() / df.a.sum())) &
+            (df.c / df.a > df.d / df.b) &
+            ((df.d / df.b) < (df.d.sum() / df.b.sum())) &
+            (df.HKA_y_chi2 < 1.3) &
+            (df.HKA_x_chi2 > df.HKA_y_chi2)
+        )
+        df = df[condition]
+        threshold = df[hka].quantile(percentile / 100.0)
+        df = df[df[hka] >= threshold]
+        df = df.sort_values(by=hka, ascending=False)
+        df = df.replace(np.nan, 'nan', regex=True)
+        df.to_csv(output[0], '\t', index=False)
+
+rule extract_genes:
+    input:
+        'output/{hka}/{percentile}/outliers.bed',
+    output:
+        'output/{hka}/{percentile}/outlier_genes.txt'
+    run:
+        df = pd.read_csv(input[0], '\t')
+        df = df[df.genes != "."]
+        df["genes"] =  df.genes.str.split(",")
+        genes = pd.unique(np.concatenate(df.genes.values))
         pd.DataFrame(genes).to_csv(output[0], index=False, header=False)
 
 

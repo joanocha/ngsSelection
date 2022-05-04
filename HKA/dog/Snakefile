@@ -1,56 +1,59 @@
 import numpy as np
 import pandas as pd
+
 rule all:
     input:
-        'final/all_unique.txt',
-        'final/all_list.txt'
+        expand(
+                'output/{hka}/{percentile}/outlier_genes.txt',
+                hka=["HKA_x_chi2", "HOMO_chi2"],
+                percentile=[95.0, 99.0,99.95, 99.5],
+        )
+
+rule add_genes:
+    input:
+        config["input_file"],
+        '/space/s2/joana/refgenomes/Functional_annotation/bedmap/genesDog.sorted.bed',
+    output:
+        "output/windows.bed",
+    shell:
+        'bedtools sort -i {input[0]} | bedtools map -a stdin -b {input[1]} -c 4 -o distinct > {output}'
 
 rule get_outliers:
-    input: 'vr_DOG_ind66cov1pval5_noIntrogressed_HKAoutput_50kb10kb'
-    output: 'final/outliers.bed'
-    run:
-        df = pd.read_csv(input[0], '\t', names=["chrom","start","end","a","b","c","d","HKA_x_chi2","HKA_y_chi2", "HOMO_chi2", "HKA_x_logpval", "HKA_y_logpval","HOMO_logpval"])
-        print(df.head())
-        condition = (
-            (df.c > df.a)
-          #  ((df.c / df.a) > (df.c.sum() / df.a.sum())) &
-           # (df.c / df.a > df.d / df.b) &
-            #(df.HKA_y_logpval < 1.3)
-        )
-        print(df.shape)
-        df = df[condition]
-        print(df.shape)
-        df = df.sort_values(by="HKA_x_chi2", ascending=False)
-        df = df.replace(np.nan, 'nan', regex=True)
-        df.to_csv(output[0], '\t', header=False, index=False)
-
-
-rule bedtools_sort:
-    input: 'final/outliers.bed'
-    output: 'final/outliers.sorted.bed'
-    shell:
-        'bedtools sort -i {input} > {output}'
-
-rule bedtools_map:
     input:
-        'final/outliers.sorted.bed',
-        '/space/s1/joana/refgenomes/Functional_annotation/bedmap/genesDog.sorted.bed'
+        "output/windows.bed",
     output:
-        'final/outlier_genes.bed'
-    shell:
-        'bedtools map -a {input[0]} -b {input[1]} -c 4 -o distinct | sort -k 8,8nr > {output}'
+        'output/{hka}/{percentile}/outliers.bed',
+    run:
+        hka = wildcards["hka"]
+        percentile = float(wildcards["percentile"])
+        df = pd.read_csv(input[0], '\t', header=None, names=["chrom","start","end","a","b","c","d","HKA_x_chi2","HKA_y_chi2", "HOMO_chi2", "HKA_x_logpval", "HKA_y_logpval","HOMO_logpval", "genes"])
+        condition = (
+            (df.c > df.a) &
+            ((df.c / df.a) > (df.c.sum() / df.a.sum())) &
+            ((df.d / df.b) < (df.d.sum() / df.b.sum())) &
+            (df.c / df.a > df.d / df.b) &
+            (df.HKA_y_logpval < 1.3) &
+            (df.HKA_x_chi2 >  df.HKA_y_chi2)
+        )
+    #    print(df.shape)
+        df = df[condition]
+        threshold = df[hka].quantile(percentile / 100.0)
+        df = df[df[hka] >= threshold]
+        df = df.sort_values(by=hka, ascending=False)
+        df = df.replace(np.nan, 'nan', regex=True)
+        df.to_csv(output[0], '\t', index=False)
 
-# 8 is HKA_x_chi2
 
-rule gene_list:
-    input: 'final/outlier_genes.bed'
+rule extract_genes:
+    input:
+        'output/{hka}/{percentile}/outliers.bed',
     output:
-        'final/all_unique.txt',
-        'final/all_list.txt',
-    shell:
-        """
-        cut -f 14 {input[0]} | grep -v "\." | grep -v "," | awk '!x[$0]++' > {output[0]} &&
-        cut -f 14 {input[0]} | grep -v "\." | sed 's|,|\\n|g' | awk '!x[$0]++'  > {output[1]}
-        """
-
+        'output/{hka}/{percentile}/outlier_genes.txt'
+    run:
+        df = pd.read_csv(input[0], '\t')
+        print(df)
+        df = df[df.genes != "."]
+        df["genes"] =  df.genes.str.split(",")
+        genes = pd.unique(np.concatenate(df.genes.values))
+        pd.DataFrame(genes).to_csv(output[0], index=False, header=False)
 

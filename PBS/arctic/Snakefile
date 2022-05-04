@@ -1,14 +1,15 @@
 
 import numpy as np
 import pandas as pd
-
+#e.g. how to run
+#snakemake -s intersect_genes_outliers.py --config input_file=vr_vvEU_vvNA_qc_ind66cov1pval5_snps_50kb10kb
 
 rule all:
     input:
         expand(
             'output/{pbs}/{percentile}/outlier_genes.txt',
             pbs=["PBS0_w", "PBS1_w", "PBS2_w"],
-            percentile=[99.95, 99.5],
+            percentile=[99.95, 99.9, 99.5],
         ),
 
 
@@ -16,9 +17,12 @@ rule filter_gff:
     input:
         "/space/s2/joana/refgenomes/Functional_annotation/bedmap/vulpes_lagopus.liftoff.gff"
     output:
-        temp("output/genes_filtered.bed")
+        "output/genes_filtered.bed"
     run:
         data = pd.read_csv(input[0], '\t', header=None)
+        print(data)
+        data = data[data[2]=="gene"]
+        print(data)
         data["gene"] = data[8].str.split(";").str[0].str.split("=").str[1]
         data.to_csv(output[0], '\t', columns=[0, 3,4, "gene"], header=False, index = False )
 
